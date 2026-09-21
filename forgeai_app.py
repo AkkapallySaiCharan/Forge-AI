@@ -6,7 +6,7 @@ Single-file production-style portfolio project.
 
 Run:
     pip install fastapi uvicorn pydantic
-    python app.py
+    python forgeai_app.py
 
 Optional real LLM mode:
     pip install openai
@@ -74,8 +74,9 @@ executor = ThreadPoolExecutor(max_workers=8)
 # ---------------------------------------------------------------------------
 
 def db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=15.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 5000")
     return conn
 
 
@@ -159,12 +160,23 @@ def ask_llm(system: str, user: str) -> str:
         from openai import OpenAI
 
         client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-        response = client.responses.create(
-            model=os.getenv("OPENAI_MODEL", "gpt-5-mini"),
-            instructions=system,
-            input=user,
-        )
-        return response.output_text.strip()
+        model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+            )
+            return response.choices[0].message.content.strip()
+        except AttributeError:
+            response = client.responses.create(
+                model=model,
+                instructions=system,
+                input=user,
+            )
+            return response.output_text.strip()
     except Exception:
         return ""
 
@@ -213,7 +225,7 @@ def security_scan(code: str) -> List[Dict[str, Any]]:
 
     patterns = [
         (
-            r"(password|passwd|secret|api[_-]?key)\s*=\s*['\"][^'\"]+['\"]",
+            r"\b[A-Za-z0-9_]*(?:password|passwd|secret(?:[_-]?key)?|api[_-]?key|token)\b\s*=\s*['\"][^'\"]+['\"]",
             "Hard-coded secret",
             "critical",
             "Move credentials to environment variables or a secret manager.",
@@ -1146,10 +1158,10 @@ if __name__ == "__main__":
     print(" Database  :", DB_PATH)
     print("=" * 68)
     print("Press CTRL+C to stop.\n")
-    
-uvicorn.run(
-    app,
-    host="127.0.0.1",
-    port=int(os.getenv("PORT", "8000")),
-    reload=False,
-)
+
+    uvicorn.run(
+        app,
+        host="127.0.0.1",
+        port=int(os.getenv("PORT", "8000")),
+        reload=False,
+    )
